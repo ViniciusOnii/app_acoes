@@ -4,9 +4,19 @@ import numpy as np
 import plotly.graph_objects as go
 import streamlit as st
 import datetime
+import requests
+from textblob import TextBlob
+from nltk.sentiment.vader import SentimentIntensityAnalyzer
+import nltk
+
+# Baixar o lexicon para VADER
+nltk.download('vader_lexicon')
 
 # Configurar a página para exibição horizontal
 st.set_page_config(page_title="Análise de Ações", layout="wide")
+
+# Configuração da API de Notícias
+NEWS_API_KEY = "b8cce54e5db84a9f9579dbe7c04ada74"  # Substitua pela sua chave da API
 
 # Função para calcular MACD
 def calcular_macd(df):
@@ -15,6 +25,54 @@ def calcular_macd(df):
     MACD = rapidaMME - lentaMME
     sinal = MACD.ewm(span=9).mean()
     return MACD, sinal
+
+# Função para buscar notícias relacionadas à ação
+def buscar_noticias(acao):
+    """Obtém notícias recentes relacionadas à ação."""
+    url = f"https://newsapi.org/v2/everything?q={acao}&apiKey={NEWS_API_KEY}&language=pt"
+    response = requests.get(url)
+    if response.status_code == 200:
+        dados = response.json()
+        return dados.get("articles", [])
+    else:
+        st.error("Erro ao buscar notícias.")
+        return []
+
+# Função para analisar o sentimento de textos
+def analisar_sentimento(texto, metodo="TextBlob"):
+    """Analisa o sentimento de um texto."""
+    if metodo == "TextBlob":
+        sentimento = TextBlob(texto).sentiment.polarity
+    else:
+        sid = SentimentIntensityAnalyzer()
+        sentimento = sid.polarity_scores(texto)['compound']
+    
+    if sentimento > 0.1:
+        return "Positivo", sentimento
+    elif sentimento < -0.1:
+        return "Negativo", sentimento
+    else:
+        return "Neutro", sentimento
+
+# Função para exibir notícias e análise de sentimento
+def exibir_noticias(acao):
+    st.subheader(f"Notícias Recentes - {acao}")
+    noticias = buscar_noticias(acao)
+    if noticias:
+        for noticia in noticias[:5]:  # Limitar a 5 notícias
+            titulo = noticia.get("title", "Sem título")
+            descricao = noticia.get("description", "Sem descrição")
+            url = noticia.get("url", "#")
+            
+            sentimento, pontuacao = analisar_sentimento(titulo)
+            
+            st.write(f"**Título**: {titulo}")
+            st.write(f"Descrição: {descricao}")
+            st.write(f"Sentimento: {sentimento} (Pontuação: {pontuacao:.2f})")
+            st.write(f"[Leia mais]({url})")
+            st.write("---")
+    else:
+        st.info("Sem notícias recentes.")
 
 # Função para plotar MACD
 def plotar_macd(df, acao):
@@ -64,42 +122,32 @@ def plotar_candlestick(df, acao):
     fig.update_layout(title=f'Gráfico Candlestick - {acao}', xaxis_title='Data', yaxis_title='Preço')
     st.plotly_chart(fig)
 
-# Função para plotar gráfico de Retorno Diário (%)
-def plotar_retorno(df, acao):
-    df['Retorno (%)'] = df['Close'].pct_change() * 100
-    fig = go.Figure(data=[go.Scatter(
-        x=df['Date'],
-        y=df['Retorno (%)'],
-        mode='lines+markers',
-        name='Retorno (%)',
-        line=dict(color='orange')
-    )])
-    fig.update_layout(title=f'Retorno Diário (%) - {acao}', xaxis_title='Data', yaxis_title='Retorno (%)')
-    st.plotly_chart(fig)
+# Função para exibir tabela de dados
+def plotar_tabela(df, acao):
+    """
+    Exibe uma tabela formatada no Streamlit com os dados do DataFrame, incluindo a coluna Média.
+    """
+    # Cálculo da média entre High, Low e Close
+    df['Média'] = df[['High', 'Low', 'Close']].mean(axis=1)
+    
+    # Formatar título e exibição
+    st.subheader(f"Tabela de Dados - {acao}")
+    
+    # Exibir a tabela no Streamlit
+    st.dataframe(df, use_container_width=True)
+
 
 # Função para indicar se o mercado está aberto ou fechado
 def mercado_status():
     agora = datetime.datetime.now()
-    abertura = datetime.time(10, 0)  # Horário de abertura: 10:00 AM
-    fechamento = datetime.time(17, 0)  # Horário de fechamento: 5:00 PM
+    abertura = datetime.time(10, 0)
+    fechamento = datetime.time(17, 0)
 
     if abertura <= agora.time() <= fechamento:
         st.success("Mercado Aberto")
     else:
         st.warning("Mercado Fechado")
-
-# Função para comparar com o fechamento do dia anterior
-def comparar_fechamento(df, acao):
-    df['Diferença'] = df['Close'].diff()
-    df['Sinal'] = df['Diferença'].apply(lambda x: 'Alta' if x > 0 else 'Baixa' if x < 0 else 'Estável')
-    fig = go.Figure(data=[go.Bar(
-        x=df['Date'],
-        y=df['Diferença'],
-        name='Variação',
-        marker_color=df['Sinal'].map({'Alta': 'green', 'Baixa': 'red', 'Estável': 'gray'})
-    )])
-    fig.update_layout(title=f'Variação do Fechamento Diário - {acao}', xaxis_title='Data', yaxis_title='Diferença')
-    st.plotly_chart(fig)
+    
 
 # Configurar Streamlit
 st.title("Análise de Ações")
@@ -112,30 +160,22 @@ executar = st.sidebar.button('Executar')
 # Seleção de gráficos a serem exibidos
 mostrar_macd = st.sidebar.checkbox('Exibir MACD', True)
 mostrar_candlestick = st.sidebar.checkbox('Exibir Candlestick', True)
-mostrar_retorno = st.sidebar.checkbox('Exibir Retorno Diário (%)', True)
-mostrar_comparacao = st.sidebar.checkbox('Exibir Comparação com Fechamento Anterior', True)
+mostrar_tabela = st.sidebar.checkbox('Exibir Tabela de Dados', True)
+mostrar_noticias = st.sidebar.checkbox('Exibir Notícias e Sentimento', True)
 
 # Indicar o status do mercado
 mercado_status()
 
 if executar:
-    acoes = [acao.strip() for acao in acoes.split(',')]  # Processar os símbolos das ações
+    acoes = [acao.strip() for acao in acoes.split(',')]
     for acao in acoes:
         st.header(f"Análise para {acao}")
         try:
-            # Obter dados da ação
             ticker = yf.Ticker(acao)
             df = ticker.history(period='1mo').reset_index()
+            df['Date'] = pd.to_datetime(df['Date']).dt.strftime('%d/%m/%Y')
+            df = df[['Date', 'Open', 'High', 'Low', 'Close', 'Volume']]
 
-            # Formatar as colunas para exibição
-            df['Date'] = pd.to_datetime(df['Date']).dt.strftime('%d/%m/%Y')  # Formatar a data
-            df = df[['Date', 'Open', 'High', 'Low', 'Close', 'Volume']]  # Selecionar colunas relevantes
-
-            # Exibir a tabela no Streamlit
-            st.subheader(f"Tabela de valores - {acao}")
-            st.dataframe(df, use_container_width=True)
-
-            # Plotar gráficos selecionados
             if mostrar_macd:
                 df['MACD'], df['sinal'] = calcular_macd(df)
                 df['flag'] = ''
@@ -152,23 +192,16 @@ if executar:
                         if df['flag'][i-1] != 'V':
                             df['flag'][i] = 'V'
                             df['preço_venda'][i] = df['Close'][i]
-                        else:
-                            df['flag'][i] = 'V'
                 plotar_macd(df, acao)
 
             if mostrar_candlestick:
                 plotar_candlestick(df, acao)
 
-            if mostrar_retorno:
-                plotar_retorno(df, acao)
+            if mostrar_tabela:
+                plotar_tabela(df, acao)
 
-            if mostrar_comparacao:
-                comparar_fechamento(df, acao)
-
-            # Mostrar nome da ação
-            info = ticker.info
-            nome_acao = info.get('shortName', 'Nome da ação não disponível')
-            st.subheader(nome_acao)
+            if mostrar_noticias:
+                exibir_noticias(acao)
 
         except Exception as e:
             st.error(f"Erro ao processar a ação {acao}: {e}")
