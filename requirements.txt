@@ -6,4 +6,4 @@ streamlit
 datetime
 requests
 textblob
-nlt
+nltk
